@@ -1,0 +1,32 @@
+[project]
+name = "omnilingual-diarization"
+version = "0.1.0"
+description = "Omnilingual speech transcription with speaker diarization"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.23.0",
+    "python-multipart>=0.0.6",
+    "pydantic-settings>=2.0.0",
+    "nemo_toolkit[asr]>=2.3.0",
+    "nltk",
+    "torch>=2.6.0",
+    "torchaudio>=2.6.0",
+    "demucs @ git+https://github.com/MahmoudAshraf97/demucs.git",
+    "deepmultilingualpunctuation @ git+https://github.com/oliverguhr/deepmultilingualpunctuation.git",
+    "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git",
+]
+
+[project.optional-dependencies]
+faster-whisper = ["faster-whisper>=1.1.0"]
+omnilingual = ["omnilingual-asr"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

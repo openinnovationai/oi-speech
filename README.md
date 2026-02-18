@@ -44,6 +44,44 @@ graph TD
 6.  **Punctuation**: A deep learning model restores punctuation (periods, commas, etc.).
 7.  **Re-alignment**: Sentence boundaries are adjusted based on punctuation for natural reading.
 
+## 📦 Local Development
+
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
+
+### Prerequisites
+
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+- FFmpeg (`brew install ffmpeg` on macOS)
+
+### Installation
+
+**Core dependencies only:**
+```bash
+uv sync
+```
+
+**With Faster Whisper backend:**
+```bash
+uv sync --extra faster-whisper
+```
+
+**With Omnilingual ASR backend:**
+```bash
+uv sync --extra omnilingual
+```
+
+**With all backends:**
+```bash
+uv sync --all-extras
+```
+
+### Running Locally
+
+```bash
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8080
+```
+
 ## 🐳 Building the Image
 
 OISpeech Server supports building a **Unified Image** containing multiple backends, or specialized slim images.
@@ -69,6 +107,13 @@ docker compose --profile gpu up --build
 ```bash
 export INSTALL_FASTER_WHISPER=false
 docker compose --profile gpu up --build
+```
+
+### 3. ARM64 GPU Build (CUDA 13)
+For ARM64 platforms (e.g. NVIDIA GH200, Jetson AGX), a dedicated Dockerfile uses the [NVIDIA NGC PyTorch](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch) base image (`26.01-py3`) with CUDA 13.0.2 and PyTorch pre-installed.
+
+```bash
+docker compose --profile arm64 up --build
 ```
 
 ## 🏃 Running & Configuration
@@ -195,6 +240,11 @@ curl -X POST http://localhost:8001/v1/audio/translations \
   -F "file=@/path/to/german_audio.mp3" \
   -F "model=medium"
 ```
+
+
+## Acknowledgements
+
+This project is inspired by [whisper-diarization](https://github.com/MahmoudAshraf97/whisper-diarization).
 
 ---
 **OISpeech Server** - *The Universal Language Interface.*

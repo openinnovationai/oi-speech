@@ -1,12 +1,12 @@
 """
-Diarization service using NeMo ClusteringDiarizer.
+Diarization service using NeMo NeuralDiarizer (MSDD).
 Adapted from https://github.com/MahmoudAshraf97/whisper-diarization
 """
 
+import json
 import logging
 import os
 import tempfile
-import json
 from typing import List, Tuple
 
 import torch
@@ -17,50 +17,30 @@ logger = logging.getLogger(__name__)
 _diarizer = None
 
 
-class SimpleDiarizer:
-    """NeMo-based Speaker Diarizer using ClusteringDiarizer."""
+class MSDDDiarizer:
+    """NeMo-based Speaker Diarizer using NeuralDiarizer (MSDD)."""
 
     def __init__(self, device: str = "cuda"):
         self.device = device
         self._validate_nemo()
+        self._initialize_model()
 
     def _validate_nemo(self):
         """Validate NeMo is available."""
         import sys
-        import traceback
 
         logger.info("Starting NeMo validation...")
         sys.stdout.flush()
-        sys.stderr.flush()
 
         try:
-            # Step-by-step import to find crash location
-            logger.info("Step 1: Importing nemo.core...")
+            logger.info("Importing nemo.collections.asr.models...")
             sys.stdout.flush()
-            import nemo.core
+            from nemo.collections.asr.models.msdd_models import NeuralDiarizer
 
-            logger.info("Step 2: Importing nemo.collections...")
-            sys.stdout.flush()
-            import nemo.collections
-
-            logger.info("Step 3: Importing nemo.collections.asr...")
-            sys.stdout.flush()
-            import nemo.collections.asr
-
-            logger.info("Step 4: Importing nemo.collections.asr.models...")
-            sys.stdout.flush()
-            import nemo.collections.asr.models
-
-            logger.info("Step 5: Accessing ClusteringDiarizer class...")
-            sys.stdout.flush()
-            from nemo.collections.asr.models import ClusteringDiarizer
-
-            logger.info("NeMo ClusteringDiarizer imported successfully")
+            logger.info("NeMo NeuralDiarizer imported successfully")
             sys.stdout.flush()
         except ImportError as e:
             logger.error(f"Failed to import NeMo: {e}")
-            logger.error(traceback.format_exc())
-            sys.stdout.flush()
             raise RuntimeError(
                 "NeMo toolkit is required for diarization. "
                 "Install with: pip install nemo_toolkit[asr]"
@@ -69,61 +49,34 @@ class SimpleDiarizer:
             logger.error(
                 f"Unexpected error during NeMo import: {type(e).__name__}: {e}"
             )
-            logger.error(traceback.format_exc())
-            sys.stdout.flush()
             raise
 
-    def _create_config(self, manifest_path: str, out_dir: str) -> str:
-        """Create diarization config YAML."""
-        config_yaml = f"""
-name: ClusteringDiarizer
-num_workers: 0
-sample_rate: 16000
-batch_size: 64
-device: {self.device}
-verbose: True
+    def _initialize_model(self):
+        """Initialize the NeuralDiarizer model."""
+        from nemo.collections.asr.models.msdd_models import NeuralDiarizer
+        from omegaconf import OmegaConf
 
-diarizer:
-  manifest_filepath: {manifest_path}
-  out_dir: {out_dir}
-  oracle_vad: False
-  collar: 0.1
-  ignore_overlap: False
-  
-  vad:
-    model_path: vad_multilingual_marblenet
-    external_vad_manifest: null
-    parameters:
-      window_length_in_sec: 0.15
-      shift_length_in_sec: 0.01
-      smoothing: "median"
-      overlap: 0.5
-      onset: 0.4
-      offset: 0.2
-      pad_onset: 0.2
-      pad_offset: 0.1
-      min_duration_on: 0.1
-      min_duration_off: 0.3
-      filter_speech_first: True
-  
-  speaker_embeddings:
-    model_path: titanet_large
-    parameters:
-      window_length_in_sec: [1.5, 1.0, 0.5]
-      shift_length_in_sec: [0.75, 0.5, 0.25]
-      multiscale_weights: [0.4, 0.35, 0.25]
-      save_embeddings: True
-  
-  clustering:
-    parameters:
-      oracle_num_speakers: False
-      max_num_speakers: 8
-      enhanced_count_thres: 10
-      max_rp_threshold: 0.3
-      sparse_search_volume: 100
-      maj_vote_spk_count: True
-"""
-        return config_yaml
+        # Load base config from YAML
+        config_path = os.path.join(
+            os.path.dirname(__file__), "diar_infer_telephonic.yaml"
+        )
+        config = OmegaConf.load(config_path)
+
+        # Apply runtime overrides
+        config.diarizer.out_dir = None
+        config.diarizer.manifest_filepath = None
+        config.diarizer.speaker_embeddings.model_path = "titanet_large"
+        config.diarizer.oracle_vad = False
+        config.diarizer.clustering.parameters.oracle_num_speakers = False
+        config.diarizer.vad.model_path = "vad_multilingual_marblenet"
+        config.diarizer.vad.parameters.onset = 0.8
+        config.diarizer.vad.parameters.offset = 0.6
+        config.diarizer.vad.parameters.pad_offset = -0.05
+        config.diarizer.msdd_model.model_path = "diar_msdd_telephonic"
+
+        logger.info("Creating NeMo NeuralDiarizer...")
+        self.model = NeuralDiarizer(cfg=config).to(self.device)
+        logger.info("NeuralDiarizer initialized successfully")
 
     def diarize(
         self, audio_waveform: torch.Tensor, sample_rate: int = 16000
@@ -138,121 +91,84 @@ diarizer:
         Returns:
             List of (start_ms, end_ms, speaker_id) tuples
         """
-        import soundfile as sf
-        import numpy as np
-        from nemo.collections.asr.models import ClusteringDiarizer
-        from omegaconf import OmegaConf
+        import torchaudio
+        from nemo.collections.asr.parts.utils.speaker_utils import rttm_to_labels
 
-        # Ensure correct shape
+        # Ensure correct shape: (1, samples)
         if audio_waveform.dim() == 1:
             audio_waveform = audio_waveform.unsqueeze(0)
 
-        # Create a persistent temp directory (not using context manager)
-        temp_dir = tempfile.mkdtemp()
-
-        try:
-            # Save audio to temporary WAV file using soundfile
-            temp_audio_path = os.path.join(temp_dir, "audio.wav")
-            audio_np = audio_waveform.cpu().numpy().squeeze()
-            sf.write(temp_audio_path, audio_np, sample_rate)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Save audio to temporary WAV file
+            temp_audio_path = os.path.join(temp_dir, "mono_file.wav")
+            torchaudio.save(
+                temp_audio_path,
+                audio_waveform,
+                sample_rate,
+                channels_first=True,
+            )
 
             # Create manifest file
             manifest_path = os.path.join(temp_dir, "manifest.json")
-            duration = audio_waveform.shape[1] / sample_rate
+            meta = {
+                "audio_filepath": temp_audio_path,
+                "offset": 0,
+                "duration": None,
+                "label": "infer",
+                "text": "-",
+                "rttm_filepath": None,
+                "uem_filepath": None,
+            }
             with open(manifest_path, "w") as f:
-                manifest_entry = {
-                    "audio_filepath": temp_audio_path,
-                    "offset": 0,
-                    "duration": duration,
-                    "label": "infer",
-                    "text": "-",
-                    "num_speakers": None,
-                    "rttm_filepath": None,
-                    "uem_filepath": None,
-                }
-                f.write(json.dumps(manifest_entry) + "\n")
+                json.dump(meta, f)
 
-            # Create config with paths
-            config_yaml = self._create_config(manifest_path, temp_dir)
-            config_path = os.path.join(temp_dir, "diar_config.yaml")
-            with open(config_path, "w") as f:
-                f.write(config_yaml)
-
-            # Load config and create diarizer
-            config = OmegaConf.load(config_path)
-
-            logger.info("Creating NeMo ClusteringDiarizer...")
-            diarizer = ClusteringDiarizer(cfg=config)
-
-            # Run diarization
-            logger.info("Starting speaker diarization...")
-            diarizer.diarize()
+            # Configure and run diarization
+            logger.info("Starting speaker diarization (MSDD)...")
+            self.model._initialize_configs(
+                manifest_path=manifest_path,
+                max_speakers=8,
+                num_speakers=None,
+                tmpdir=temp_dir,
+                batch_size=24,
+                num_workers=0,
+                verbose=True,
+            )
+            self.model.clustering_embedding.clus_diar_model._diarizer_params.out_dir = (
+                temp_dir
+            )
+            self.model.clustering_embedding.clus_diar_model._diarizer_params.manifest_filepath = (
+                manifest_path
+            )
+            self.model.msdd_model.cfg.test_ds.manifest_filepath = manifest_path
+            self.model.diarize()
             logger.info("Speaker diarization complete")
 
             # Parse RTTM output
-            rttm_path = os.path.join(temp_dir, "pred_rttms", "audio.rttm")
-            if os.path.exists(rttm_path):
-                speaker_ts = self._parse_rttm(rttm_path)
-                logger.info(f"Parsed {len(speaker_ts)} speaker segments from RTTM")
-            else:
-                # Check alternative locations
-                for root, dirs, files in os.walk(temp_dir):
-                    for file in files:
-                        if file.endswith(".rttm"):
-                            rttm_path = os.path.join(root, file)
-                            speaker_ts = self._parse_rttm(rttm_path)
-                            logger.info(
-                                f"Found RTTM at {rttm_path}, parsed {len(speaker_ts)} segments"
-                            )
-                            break
-                    else:
-                        continue
-                    break
-                else:
-                    logger.warning("No RTTM output found, returning empty speaker list")
-                    speaker_ts = []
+            rttm_path = os.path.join(temp_dir, "pred_rttms", "mono_file.rttm")
+            pred_labels = rttm_to_labels(rttm_path)
 
-            # Clean up diarizer
-            del diarizer
-            if self.device == "cuda":
-                torch.cuda.empty_cache()
+            speaker_ts = []
+            for label in pred_labels:
+                start, end, speaker = label.split()
+                start, end = float(start), float(end)
+                start_ms, end_ms = int(start * 1000), int(end * 1000)
+                speaker_id = speaker.split("_")[1]
+                speaker_ts.append((start_ms, end_ms, speaker_id))
 
-        finally:
-            # Clean up temp directory
-            import shutil
-
-            try:
-                shutil.rmtree(temp_dir)
-            except Exception as e:
-                logger.warning(f"Failed to clean up temp dir: {e}")
+            speaker_ts.sort(key=lambda x: x[0])
+            logger.info(f"Parsed {len(speaker_ts)} speaker segments")
 
         return speaker_ts
 
-    def _parse_rttm(self, rttm_path: str) -> List[Tuple[float, float, str]]:
-        """Parse RTTM file to get speaker timestamps."""
-        speaker_ts = []
-        with open(rttm_path, "r") as f:
-            for line in f:
-                parts = line.strip().split()
-                if len(parts) >= 8 and parts[0] == "SPEAKER":
-                    start = float(parts[3]) * 1000  # Convert to ms
-                    duration = float(parts[4]) * 1000
-                    speaker = parts[7]
-                    speaker_ts.append((start, start + duration, speaker))
 
-        # Sort by start time
-        speaker_ts.sort(key=lambda x: x[0])
-        return speaker_ts
-
-
-def get_diarizer(device: str = "cuda") -> SimpleDiarizer:
+def get_diarizer(device: str = "cuda") -> MSDDDiarizer:
     """Get or create the global diarizer instance."""
     global _diarizer
     if _diarizer is None:
-        _diarizer = SimpleDiarizer(device=device)
+        _diarizer = MSDDDiarizer(device=device)
     return _diarizer
 
 
-def load_diarizer(device: str = "cuda") -> SimpleDiarizer:
+def load_diarizer(device: str = "cuda") -> MSDDDiarizer:
     """Load and cache the diarizer."""
     return get_diarizer(device)

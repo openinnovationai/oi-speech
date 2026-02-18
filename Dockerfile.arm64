@@ -1,15 +1,12 @@
-FROM python:3.11-slim
+FROM nvcr.io/nvidia/pytorch:26.01-py3
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install FFmpeg and system dependencies
+# Install system dependencies (Python, CUDA, PyTorch already included in NGC image)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libsndfile1 \
-    git \
-    build-essential \
-    g++ \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
@@ -18,24 +15,31 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 # Set working directory
 WORKDIR /app
 
-# Install torch first with CPU index
-RUN uv pip install --system --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-
 # Copy pyproject.toml for dependency installation
 COPY pyproject.toml .
 
-# Install core dependencies
-RUN uv pip install --system --no-cache-dir --prerelease=allow .
+# Install core dependencies (torch is already in the base image, skip reinstalling)
+RUN uv pip install --system --no-cache-dir --prerelease=allow --no-deps .
+RUN uv pip install --system --no-cache-dir --prerelease=allow \
+    "fastapi>=0.100.0" \
+    "uvicorn[standard]>=0.23.0" \
+    "python-multipart>=0.0.6" \
+    "pydantic-settings>=2.0.0" \
+    "nemo_toolkit[asr]>=2.3.0" \
+    "nltk" \
+    "deepmultilingualpunctuation @ git+https://github.com/oliverguhr/deepmultilingualpunctuation.git" \
+    "demucs @ git+https://github.com/MahmoudAshraf97/demucs.git" \
+    "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git"
 
 # Install optional backends based on build args
 ARG INSTALL_FASTER_WHISPER=true
 RUN if [ "$INSTALL_FASTER_WHISPER" = "true" ]; then \
-    uv pip install --system --no-cache-dir ".[faster-whisper]"; \
+    uv pip install --system --no-cache-dir "faster-whisper>=1.1.0"; \
     fi
 
 ARG INSTALL_OMNILINGUAL=true
 RUN if [ "$INSTALL_OMNILINGUAL" = "true" ]; then \
-    uv pip install --system --no-cache-dir ".[omnilingual]"; \
+    uv pip install --system --no-cache-dir "omnilingual-asr"; \
     fi
 
 # Download NLTK data
@@ -53,14 +57,20 @@ RUN mkdir -p /home/runner/.cache && \
     chown -R runner:runner /home/runner/.cache
 
 # Environment variables with defaults
-ENV ASR_BACKEND=faster_whisper
-ENV ASR_MODEL=base
-ENV ASR_DEVICE=cpu
-ENV ASR_COMPUTE_TYPE=int8
+ENV ASR_MODEL=omniASR_LLM_Unlimited_3B_v2
+ENV ASR_DEVICE=cuda
+ENV ASR_COMPUTE_TYPE=float16
 ENV ENABLE_STEMMING=false
 ENV SUPPRESS_NUMERALS=true
-ENV BATCH_SIZE=4
-
+ENV BATCH_SIZE=8
+ENV HOME=/tmp
+ENV FLASHINFER_WORKSPACE_BASE=/tmp/flashinfer
+ENV XDG_CACHE_HOME=/tmp/.cache
+ENV XDG_CONFIG_HOME=/tmp/.config
+ENV HF_HOME=/tmp/huggingface
+ENV TORCH_HOME=/tmp/torch
+ENV TRITON_CACHE_DIR=/tmp/triton
+ENV VLLM_CACHE_DIR=/tmp/vllm_cache
 ENV NEMO_CACHE_DIR=/tmp/nemo
 ENV MPLCONFIGDIR=/tmp/matplotlib
 
@@ -69,10 +79,7 @@ COPY startup.sh /app/startup.sh
 RUN chmod +x /app/startup.sh
 
 # Expose port
-EXPOSE 8000
-
-# Switch to non-root user
-USER runner
+EXPOSE 8080
 
 # Run the application via startup script
 ENTRYPOINT ["/app/startup.sh"]

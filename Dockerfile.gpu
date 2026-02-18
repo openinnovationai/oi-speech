@@ -29,27 +29,24 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 # Set working directory
 WORKDIR /app
 
-# Install Python dependencies (GPU/CUDA versions) - Install torch first!
-# Using torch >= 2.6 with CUDA 12.4 support
-RUN uv pip install --system --no-cache-dir --upgrade pip && \
-    uv pip install --system --no-cache-dir torch>=2.6.0 torchaudio>=2.6.0 --index-url https://download.pytorch.org/whl/cu124
+# Install torch first with CUDA 12.4 index
+RUN uv pip install --system --no-cache-dir torch>=2.6.0 torchaudio>=2.6.0 --index-url https://download.pytorch.org/whl/cu124
 
-# Copy common requirements
-COPY requirements-common.txt .
-RUN uv pip install --system --no-cache-dir --prerelease=allow -r requirements-common.txt
+# Copy pyproject.toml for dependency installation
+COPY pyproject.toml .
 
-# Install Faster Whisper if requested
+# Install core dependencies
+RUN uv pip install --system --no-cache-dir --prerelease=allow .
+
+# Install optional backends based on build args
 ARG INSTALL_FASTER_WHISPER=true
-COPY requirements-faster-whisper.txt .
 RUN if [ "$INSTALL_FASTER_WHISPER" = "true" ]; then \
-    uv pip install --system --no-cache-dir -r requirements-faster-whisper.txt; \
+    uv pip install --system --no-cache-dir ".[faster-whisper]"; \
     fi
 
-# Install Omnilingual if requested
 ARG INSTALL_OMNILINGUAL=true
-COPY requirements-omnilingual.txt .
 RUN if [ "$INSTALL_OMNILINGUAL" = "true" ]; then \
-    uv pip install --system --no-cache-dir -r requirements-omnilingual.txt; \
+    uv pip install --system --no-cache-dir ".[omnilingual]"; \
     fi
 
 # Download NLTK data
@@ -67,7 +64,7 @@ RUN mkdir -p /home/runner/.cache && \
     chown -R runner:runner /home/runner/.cache
 
 # Environment variables with defaults
-ENV ASR_MODEL=omniASR_LLM_Unlimited_7B_v2
+ENV ASR_MODEL=omniASR_LLM_Unlimited_3B_v2
 ENV ASR_DEVICE=cuda
 ENV ASR_COMPUTE_TYPE=float16
 ENV ENABLE_STEMMING=false
