@@ -1,0 +1,61 @@
+services:
+  # GPU Service - Use with: docker compose --profile gpu up
+  whisper-diarization-gpu:
+    profiles: [ "gpu" ]
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+      args:
+        INSTALL_FASTER_WHISPER: ${INSTALL_FASTER_WHISPER:-true}
+        INSTALL_OMNILINGUAL: ${INSTALL_OMNILINGUAL:-true}
+    container_name: whisper-diarization-gpu
+    ports:
+      - "8001:8080"
+    environment:
+      - ASR_BACKEND=${ASR_BACKEND:-faster_whisper}
+      - ASR_MODEL=${ASR_MODEL:-medium.en}
+      - ASR_DEVICE=cuda
+      - ASR_COMPUTE_TYPE=${ASR_COMPUTE_TYPE:-float16}
+      - ENABLE_STEMMING=${ENABLE_STEMMING:-false}
+      - SUPPRESS_NUMERALS=${SUPPRESS_NUMERALS:-true}
+      - BATCH_SIZE=${BATCH_SIZE:-8}
+    volumes:
+      # Model caching
+      - whisper-diarization-models:/home/runner/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    restart: unless-stopped
+
+  # CPU Service - Use with: docker compose --profile cpu up
+  whisper-diarization-cpu:
+    profiles: [ "cpu" ]
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+      args:
+        INSTALL_FASTER_WHISPER: ${INSTALL_FASTER_WHISPER:-true}
+        INSTALL_OMNILINGUAL: ${INSTALL_OMNILINGUAL:-true}
+    container_name: whisper-diarization-cpu
+    ports:
+      - "8000:8000"
+    environment:
+      - ASR_BACKEND=${ASR_BACKEND:-faster_whisper}
+      - ASR_MODEL=${ASR_MODEL:-base}
+      - ASR_DEVICE=cpu
+      - ASR_COMPUTE_TYPE=${ASR_COMPUTE_TYPE:-int8}
+      - ENABLE_STEMMING=${ENABLE_STEMMING:-false}
+      - SUPPRESS_NUMERALS=${SUPPRESS_NUMERALS:-true}
+      - BATCH_SIZE=${BATCH_SIZE:-4}
+    volumes:
+      # Model caching
+      - whisper-diarization-models:/home/runner/.cache
+    restart: unless-stopped
+
+volumes:
+  whisper-diarization-models:
+    driver: local

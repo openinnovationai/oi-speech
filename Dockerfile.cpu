@@ -1,0 +1,81 @@
+FROM python:3.11-slim
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install FFmpeg and system dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libsndfile1 \
+    git \
+    build-essential \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+
+# Set working directory
+WORKDIR /app
+
+# Install Python dependencies (CPU versions) - Install torch first!
+# Use uv for faster installation
+RUN uv pip install --system --no-cache-dir --upgrade pip && \
+    uv pip install --system --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Copy common requirements
+COPY requirements-common.txt .
+RUN uv pip install --system --no-cache-dir --prerelease=allow -r requirements-common.txt
+
+# Install Faster Whisper if requested
+ARG INSTALL_FASTER_WHISPER=true
+COPY requirements-faster-whisper.txt .
+RUN if [ "$INSTALL_FASTER_WHISPER" = "true" ]; then \
+    uv pip install --system --no-cache-dir -r requirements-faster-whisper.txt; \
+    fi
+
+# Install Omnilingual if requested
+ARG INSTALL_OMNILINGUAL=true
+COPY requirements-omnilingual.txt .
+RUN if [ "$INSTALL_OMNILINGUAL" = "true" ]; then \
+    uv pip install --system --no-cache-dir -r requirements-omnilingual.txt; \
+    fi
+
+# Download NLTK data
+RUN python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')"
+
+# Copy application code
+COPY app/ ./app/
+
+# Create non-root user
+RUN useradd -u 10000 -m runner && \
+    chown -R runner:runner /app
+
+# Create cache directory for model downloads
+RUN mkdir -p /home/runner/.cache && \
+    chown -R runner:runner /home/runner/.cache
+
+# Environment variables with defaults
+ENV ASR_BACKEND=faster_whisper
+ENV ASR_MODEL=base
+ENV ASR_DEVICE=cpu
+ENV ASR_COMPUTE_TYPE=int8
+ENV ENABLE_STEMMING=false
+ENV SUPPRESS_NUMERALS=true
+ENV BATCH_SIZE=4
+
+ENV NEMO_CACHE_DIR=/tmp/nemo
+ENV MPLCONFIGDIR=/tmp/matplotlib
+
+# Copy startup script
+COPY startup.sh /app/startup.sh
+RUN chmod +x /app/startup.sh
+
+# Expose port
+EXPOSE 8000
+
+# Switch to non-root user
+USER runner
+
+# Run the application via startup script
+ENTRYPOINT ["/app/startup.sh"]
