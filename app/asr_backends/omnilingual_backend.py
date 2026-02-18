@@ -76,6 +76,53 @@ class OmnilingualBackend(ASRBackend):
             logger.error(f"Failed to decode audio with ffmpeg: {e}")
             raise
 
+    def _convert_to_wav(self, audio_path: str) -> str:
+        """
+        Convert audio to 16kHz mono WAV for robust processing.
+        Returns path to total temporary file.
+        """
+        import tempfile
+
+        # Create temp file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        temp_file.close()
+
+        try:
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-nostdin",
+                "-threads",
+                "0",
+                "-i",
+                audio_path,
+                "-f",
+                "wav",
+                "-ac",
+                "1",
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "16000",
+                temp_file.name,
+            ]
+
+            # Run ffmpeg
+            process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            out, err = process.communicate()
+
+            if process.returncode != 0:
+                raise RuntimeError(f"FFmpeg failed: {err.decode()}")
+
+            return temp_file.name
+
+        except Exception:
+            if os.path.exists(temp_file.name):
+                os.unlink(temp_file.name)
+            raise
+
     def transcribe(
         self,
         audio_path: str,
@@ -99,25 +146,34 @@ class OmnilingualBackend(ASRBackend):
 
         logger.info(f"Transcribing {audio_path} with language input: {lang_input}")
 
-        # Usage: transcriptions = pipeline.transcribe(audio_files, lang=lang, batch_size=2)
-        transcriptions = self._pipeline.transcribe(
-            [audio_path], lang=lang_input, batch_size=1
-        )
+        # Convert to WAV first to ensure compatibility (fixes MP3 issues)
+        wav_path = self._convert_to_wav(audio_path)
 
-        # Result is likely a list of strings (transcripts)
-        text = transcriptions[0]
+        try:
+            # Usage: transcriptions = pipeline.transcribe(audio_files, lang=lang, batch_size=2)
+            transcriptions = self._pipeline.transcribe(
+                [wav_path], lang=lang_input, batch_size=1
+            )
 
-        # We need duration.
-        audio_data = self.decode_audio(audio_path)
-        duration = len(audio_data) / 16000.0
+            # Result is likely a list of strings (transcripts)
+            text = transcriptions[0]
 
-        return ASRResult(
-            text=text,
-            language=language or "unknown",
-            duration=duration,
-            segments=[{"start": 0.0, "end": duration, "text": text}],
-            words=[],  # No word timestamps from generic pipeline
-        )
+            # We need duration.
+            audio_data = self.decode_audio(wav_path)
+            duration = len(audio_data) / 16000.0
+
+            return ASRResult(
+                text=text,
+                language=language or "unknown",
+                duration=duration,
+                segments=[{"start": 0.0, "end": duration, "text": text}],
+                words=[],  # No word timestamps from generic pipeline
+            )
+
+        finally:
+            # Clean up temp WAV file
+            if os.path.exists(wav_path):
+                os.unlink(wav_path)
 
     def unload(self):
         if self._pipeline:

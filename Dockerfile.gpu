@@ -67,7 +67,7 @@ RUN mkdir -p /home/runner/.cache && \
     chown -R runner:runner /home/runner/.cache
 
 # Environment variables with defaults
-ENV ASR_MODEL=omniASR_LLM_Unlimited_3B_v2
+ENV ASR_MODEL=omniASR_LLM_Unlimited_7B_v2
 ENV ASR_DEVICE=cuda
 ENV ASR_COMPUTE_TYPE=float16
 ENV ENABLE_STEMMING=false

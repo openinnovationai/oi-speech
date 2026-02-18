@@ -96,7 +96,7 @@ diarizer:
     parameters:
       window_length_in_sec: 0.15
       shift_length_in_sec: 0.01
-      smoothing: True
+      smoothing: "median"
       overlap: 0.5
       onset: 0.4
       offset: 0.2
