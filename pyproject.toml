@@ -1,7 +1,7 @@
 [project]
-name = "omnilingual-diarization"
+name = "oi-speech"
 version = "0.1.0"
-description = "Omnilingual speech transcription with speaker diarization"
+description = "audio speech transcription with speaker diarization"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.100.0",
